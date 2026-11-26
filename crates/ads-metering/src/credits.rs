@@ -86,13 +86,23 @@ impl CreditEngine {
             let file = LedgerFile {
                 accounts: accounts.clone(),
             };
+            // Ensure the parent directory exists (e.g. /data/ads-credits/).
+            if let Some(parent) = p.parent() {
+                if std::fs::create_dir_all(parent).is_err() {
+                    eprintln!("[credits] WARN: cannot create persist dir {}", parent.display());
+                }
+            }
             let tmp = p.with_extension("json.tmp");
-            if serde_json::to_string_pretty(&file)
+            match serde_json::to_string_pretty(&file)
                 .ok()
                 .and_then(|s| std::fs::write(&tmp, s).ok())
-                .is_some()
             {
-                let _ = std::fs::rename(&tmp, p);
+                Some(()) => {
+                    if std::fs::rename(&tmp, p).is_err() {
+                        eprintln!("[credits] WARN: rename failed for {}", p.display());
+                    }
+                }
+                None => eprintln!("[credits] WARN: persist write failed for {}", p.display()),
             }
         }
     }
