@@ -2,6 +2,8 @@
 // Copyright (c) 2026 ARDYN INTELLIGENCE SYSTEMS INC. All Rights Reserved.
 #![forbid(unsafe_code)]
 
+pub mod credits;
+
 use ads_ddc::{DestructionDataCertificate, VerificationTier};
 use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;

@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 env:
+  IMAGE_NAME_LC: ${{ github.repository_owner }}/ardyn-ads-sidecar
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/ardyn-ads-sidecar
 
@@ -37,7 +38,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
-            type=raw,value=v1.0.0
+            type=raw,value=v1.1.0
             type=raw,value=latest
 
       - name: Build & push
@@ -55,7 +56,7 @@ jobs:
         run: |
           docker run -d --name smoke -p 18443:8443 \
             -e ADS_LISTEN_ADDR=0.0.0.0:8443 \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v1.0.0
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v1.1.0
           sleep 3
           curl -fsS http://localhost:18443/v1/health | tee /dev/stderr | grep -q '"ok"\|healthy\|service'
           docker rm -f smoke

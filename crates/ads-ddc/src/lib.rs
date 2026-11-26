@@ -261,4 +261,8 @@ impl AppendOnlyMerkleLedger {
     pub fn len(&self) -> usize {
         self.leaves.len()
     }
+
+    pub fn leaves_len(&self) -> usize {
+        self.leaves.len()
+    }
 }

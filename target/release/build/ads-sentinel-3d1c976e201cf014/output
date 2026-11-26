@@ -1,0 +1,4 @@
+cargo:rustc-link-search=native=/workspace/ads-platform/ardyn-ads-platform/crates/ads-sentinel/../../native/ardyn_isa_scrubber
+cargo:rustc-link-search=native=native/ardyn_isa_scrubber
+cargo:rustc-link-search=native=../../native/ardyn_isa_scrubber
+cargo:rustc-link-lib=dylib=ardyn_isa_scrubber

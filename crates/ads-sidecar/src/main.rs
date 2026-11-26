@@ -1,5 +1,6 @@
 // crates/ads-sidecar/src/main.rs
 // Copyright (c) 2026 ARDYN INTELLIGENCE SYSTEMS INC. All Rights Reserved.
+pub mod web;
 use ads_core::{
     compute_baseline_state_digest, decrypt_client_ingress, wrap_release_key_with_ddc,
     LifecycleGranularity, MathematicalInterlockVault, ProtectedResultKind,
@@ -47,7 +48,7 @@ impl SidecarState {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SovereignExecuteRequest {
     pub session_id: String,
     pub tenant_id: String,
@@ -74,9 +75,29 @@ pub struct SovereignExecutionResponse {
     pub sovereignty_usage_token: SovereigntyUsageToken,
 }
 
-async fn health_handler(State(state): State<Arc<SidecarState>>) -> Json<serde_json::Value> {
+pub static CREDITS: std::sync::OnceLock<std::sync::Arc<ads_metering::credits::CreditEngine>> =
+    std::sync::OnceLock::new();
+
+async fn health_handler(State(state): State<Arc<SidecarState>>) -> (axum::http::HeaderMap, Json<serde_json::Value>) {
     let root = state.ledger.lock().unwrap().current_root_hex();
-    Json(serde_json::json!({
+    let tree_size = state.ledger.lock().unwrap().leaves_len();
+    let host = env::var("HOSTNAME").ok().unwrap_or_else(|| "ads-node".into());
+    let mut h = axum::http::HeaderMap::new();
+    h.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+    (h, Json(serde_json::json!({
+        "status": "ok",
+        "service": "ardyn-ads-sidecar",
+        "version": env!("CARGO_PKG_VERSION"),
+        "organization": "ARDYN INTELLIGENCE SYSTEMS INC.",
+        "instance_id": host,
+        "assurance_tier": "SINGLE_TENANT_SECURE_METAL",
+        "isa_scrubber_mechanism": "x86_64_MOVNTDQ_CLFLUSH_SFENCE",
+        "phase2_dispatches_per_event": 15,
+        "mandatory_probes": ["MemoryIntegrityProbe", "DiskArtefactProbe", "KvSnapshotProbe", "NonceIntegrityProbe"],
+        "protected_state_manifest_digest_hex": root,
+        "merkle_ledger_tree_size": tree_size,
+        "acta_notarization_default_url": "https://acta-server-998422936041.us-west1.run.app",
+        "acta_auto_notarize_configured": false,
         "status": "SOVEREIGN_ACTIVE",
         "organization": "ARDYN INTELLIGENCE SYSTEMS INC.",
         "gateway_x25519_pub_hex": state.gateway_pk_hex,
@@ -84,13 +105,29 @@ async fn health_handler(State(state): State<Arc<SidecarState>>) -> Json<serde_js
         "attestation_root_id": state.evidence_generator.attestation_root_id,
         "metering_ed25519_pub_hex": state.metering.pubkey_hex,
         "ledger_merkle_root_hex": root,
-    }))
+        "gateway_x25519_public_key_hex": state.gateway_pk_hex,
+        "credits": CREDITS.get().map(|c| serde_json::json!({
+            "enabled": true,
+            "price_cents_per_ddc": c.price_cents(),
+            "min_deposit_cents": ads_metering::credits::MIN_DEPOSIT_CENTS,
+            "payment_providers": ["promo_code", "stripe_pending"],
+        })).unwrap_or(serde_json::json!(null)),
+    })))
 }
 
 async fn execute_handler(
     State(state): State<Arc<SidecarState>>,
     Json(req): Json<SovereignExecuteRequest>,
 ) -> Result<Json<SovereignExecutionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    sovereign_execute(state, req).await.map(Json)
+}
+
+/// Shared destructive pipeline used by both the /v1/sovereign/execute native
+/// route and the web-console /v1/execute compatibility route.
+pub async fn sovereign_execute(
+    state: Arc<SidecarState>,
+    req: SovereignExecuteRequest,
+) -> Result<SovereignExecutionResponse, (StatusCode, Json<serde_json::Value>)> {
     let event_id = Uuid::new_v4().to_string();
     let client_pub: [u8; 32] = hex::decode(&req.client_ephemeral_pub_hex)
         .ok()
@@ -216,7 +253,7 @@ async fn execute_handler(
     let ledger_receipt = state.ledger.lock().unwrap().append(&ddc).unwrap();
     let usage_token = state.metering.issue_usage_token(&req.tenant_id, &ddc);
 
-    Ok(Json(SovereignExecutionResponse {
+    Ok(SovereignExecutionResponse {
         status: "RELEASED_AFTER_VERIFIED_DESTRUCTION".to_string(),
         event_id,
         session_id: req.session_id,
@@ -228,7 +265,7 @@ async fn execute_handler(
         ddc,
         ledger_receipt,
         sovereignty_usage_token: usage_token,
-    }))
+    })
 }
 
 async fn verify_ddc_handler(
@@ -265,9 +302,47 @@ async fn main() {
     let upstream = env::var("ADS_UPSTREAM_URL").ok();
     let listen_addr = env::var("ADS_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8443".to_string());
     let state = Arc::new(SidecarState::new(upstream, None));
-    let app = build_router(state);
+
+    // Prepaid credits (OpenRouter-style deposits): $25 min, $0.50 per DDC.
+    let price = env::var("ADS_EVENT_PRICE_CENTS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(ads_metering::credits::DEFAULT_EVENT_PRICE_CENTS);
+    let persist = env::var("ADS_CREDITS_FILE").ok().map(std::path::PathBuf::from);
+    let credits = Arc::new(ads_metering::credits::CreditEngine::new(price, persist));
+    let provider = ads_metering::credits::PromoCodeProvider::from_env(
+        &env::var("ADS_PROMO_CODES").unwrap_or_default(),
+    );
+    let demo_seeds: Vec<(String, i64)> = env::var("ADS_DEMO_SEEDS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|pair| {
+            let mut it = pair.trim().splitn(2, ':');
+            let t = it.next()?.trim().to_string();
+            let c = it.next()?.trim().parse::<i64>().ok()?;
+            Some((t, c))
+        })
+        .collect();
+
+    let _ = CREDITS.set(credits.clone());
+    let web_state = Arc::new(web::WebState {
+        core: state.clone(),
+        credits: credits.clone(),
+        provider,
+        demo_seeds,
+    });
+    web::seed_demo_accounts(&web_state);
+
+    // Native sovereign routes + web-console compatibility routes on one service.
+    let app = build_router(state).merge(web::build_web_router(web_state));
     let listener = tokio::net::TcpListener::bind(&listen_addr).await.expect("Bind failed");
-    println!("ARDYN INTELLIGENCE SYSTEMS INC. — Sovereign Sidecar listening on {}", listen_addr);
+    println!(
+        "ARDYN INTELLIGENCE SYSTEMS INC. — Sovereign Sidecar v{} listening on {} (credits: {}c/DDC, min deposit {}c)",
+        env!("CARGO_PKG_VERSION"),
+        listen_addr,
+        price,
+        ads_metering::credits::MIN_DEPOSIT_CENTS
+    );
     axum::serve(listener, app).await.unwrap();
 }
 
