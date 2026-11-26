@@ -288,3 +288,104 @@ mod tests {
         ));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Stateless tenant keys — ads_tk_v1:<tenant>:<64-hex-mac>
+// Mirrors the acta_tk_v1 scheme on the Acta gateway: the key IS the account.
+// MAC = HMAC-SHA256(master_key, "ads_tk_v1:" + tenant), so the sidecar needs
+// no key database — possession of the MAC is proof of the tenant binding.
+// ---------------------------------------------------------------------------
+
+use hmac::{Hmac, Mac};
+use sha2::Digest as _;
+type HMAC = Hmac<sha2::Sha256>;
+
+pub struct TenantKeyAuth {
+    master_key: Option<[u8; 32]>,
+    /// Tenants allowed without a key (e.g. the public web-console demo tenant).
+    pub keyless_tenants: Vec<String>,
+}
+
+pub const TENANT_KEY_PREFIX: &str = "ads_tk_v1:";
+
+#[derive(Debug, PartialEq)]
+pub enum TenantAuthVerdict {
+    /// No Authorization header: allowed because the tenant is keyless-allowlisted.
+    KeylessAllowed,
+    /// Valid key, tenant must equal the key's bound tenant.
+    Keyed(String),
+    /// Missing/invalid credential for a protected tenant — fail closed.
+    Denied,
+}
+
+impl TenantKeyAuth {
+    /// master_key: hex 32-byte secret from ADS_TENANT_MASTER_KEY. None disables auth.
+    pub fn new(master_hex: Option<&str>, keyless: Vec<String>) -> Self {
+        let master_key = master_hex
+            .and_then(|h| hex::decode(h).ok())
+            .and_then(|b| b.try_into().ok());
+        Self { master_key, keyless_tenants: keyless }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.master_key.is_some()
+    }
+
+    pub fn mint(&self, tenant_id: &str) -> Result<String, CreditError> {
+        let mk = self
+            .master_key
+            .as_ref()
+            .ok_or(CreditError::InvalidCode)?;
+        let mut mac = HMAC::new_from_slice(mk).map_err(|_| CreditError::InvalidCode)?;
+        mac.update(format!("{}{}", TENANT_KEY_PREFIX, tenant_id).as_bytes());
+        let out = mac.finalize().into_bytes();
+        Ok(format!("{}{}:{}", TENANT_KEY_PREFIX, tenant_id, hex::encode(out)))
+    }
+
+    pub fn verify(&self, bearer: Option<&str>, tenant_id: &str) -> TenantAuthVerdict {
+        // Keyless allowlist always wins (demo console).
+        if self.keyless_tenants.iter().any(|t| t == tenant_id) && bearer.is_none() {
+            return TenantAuthVerdict::KeylessAllowed;
+        }
+        let Some(bearer) = bearer else {
+            return TenantAuthVerdict::Denied;
+        };
+        let Some(rest) = bearer.strip_prefix(TENANT_KEY_PREFIX) else {
+            return TenantAuthVerdict::Denied;
+        };
+        let Some((bound_tenant, presented_mac)) = rest.rsplit_once(':') else {
+            return TenantAuthVerdict::Denied;
+        };
+        if bound_tenant != tenant_id {
+            return TenantAuthVerdict::Denied; // key bound to a different tenant
+        }
+        match self.mint(bound_tenant) {
+            Ok(expected) if expected == bearer => TenantAuthVerdict::Keyed(bound_tenant.to_string()),
+            _ => TenantAuthVerdict::Denied,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tenant_key_tests {
+    use super::*;
+
+    #[test]
+    fn mint_verify_and_failures() {
+        let mk = "aa".repeat(32);
+        let auth = TenantKeyAuth::new(Some(&mk), vec!["ardyn_web_console".into()]);
+        let key = auth.mint("acme-corp").unwrap();
+        assert!(key.starts_with("ads_tk_v1:acme-corp:"));
+        // valid key + matching tenant
+        assert_eq!(auth.verify(Some(&key), "acme-corp"), TenantAuthVerdict::Keyed("acme-corp".into()));
+        // key used for a different tenant -> denied
+        assert_eq!(auth.verify(Some(&key), "other"), TenantAuthVerdict::Denied);
+        // tampered MAC -> denied
+        let bad = format!("{}x", &key[..key.len() - 1]);
+        assert_eq!(auth.verify(Some(&bad), "acme-corp"), TenantAuthVerdict::Denied);
+        // keyless allowlist -> allowed without header
+        assert_eq!(auth.verify(None, "ardyn_web_console"), TenantAuthVerdict::KeylessAllowed);
+        // protected tenant without key -> denied
+        assert_eq!(auth.verify(None, "acme-corp"), TenantAuthVerdict::Denied);
+    }
+}

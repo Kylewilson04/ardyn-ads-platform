@@ -325,10 +325,24 @@ async fn main() {
         .collect();
 
     let _ = CREDITS.set(credits.clone());
+    let keyless: Vec<String> = env::var("ADS_KEYLESS_TENANTS")
+        .unwrap_or_else(|_| "ardyn_web_console".to_string())
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let tenant_auth = Arc::new(ads_metering::credits::TenantKeyAuth::new(
+        env::var("ADS_TENANT_MASTER_KEY").ok().as_deref(),
+        keyless,
+    ));
     let web_state = Arc::new(web::WebState {
         core: state.clone(),
         credits: credits.clone(),
         provider,
+        tenant_auth,
+        admin_key: env::var("ADS_ADMIN_KEY").ok(),
+        stripe_secret: env::var("STRIPE_SECRET_KEY").ok(),
+        stripe_webhook_secret: env::var("STRIPE_WEBHOOK_SECRET").ok(),
         demo_seeds,
     });
     web::seed_demo_accounts(&web_state);
