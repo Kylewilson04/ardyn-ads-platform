@@ -1,0 +1,21 @@
+services:
+  upstream-incident-engine:
+    image: hashicorp/http-echo:1.0
+    command: ["-listen=:8080", "-text={\"Containment\":\"ISOLATED\",\"LiabilityPersistedBytes\":0}"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+  ardyn-sovereign-sidecar:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.sidecar
+    ports:
+      - "8443:8443"
+    cap_add:
+      - IPC_LOCK
+    environment:
+      ADS_UPSTREAM_URL: "http://upstream-incident-engine:8080"
+      ADS_LISTEN_ADDR: "0.0.0.0:8443"
+    depends_on:
+      - upstream-incident-engine

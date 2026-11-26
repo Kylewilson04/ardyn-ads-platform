@@ -1,0 +1,13 @@
+[package]
+name = "ads-metering"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ads-ddc = { path = "../ads-ddc" }
+ed25519-dalek.workspace = true
+rand_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true

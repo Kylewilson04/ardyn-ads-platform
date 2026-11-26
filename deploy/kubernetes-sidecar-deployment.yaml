@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ardyn-zero-retention-service
+  labels:
+    vendor: ardyn-intelligence-systems-inc
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sovereign-workload
+  template:
+    metadata:
+      labels:
+        app: sovereign-workload
+      annotations:
+        ads.ardyn.ai/enabled: "true"
+        ads.ardyn.ai/granularity: "PER_REQUEST"
+    spec:
+      shareProcessNamespace: true
+      volumes:
+        - name: ardyn-volatile-ipc
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+      containers:
+        - name: customer-workload
+          image: registry.enterprise.internal/secops-triage:latest
+          securityContext:
+            readOnlyRootFilesystem: true
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: ardyn-volatile-ipc
+              mountPath: /var/run/ardyn
+        - name: ardyn-ads-sidecar
+          image: ghcr.io/ardyn-intelligence/ads-sidecar:1.0.0
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK", "SYS_PTRACE", "BPF"]
+          env:
+            - name: ADS_UPSTREAM_URL
+              value: "http://127.0.0.1:8080"
+            - name: ADS_LISTEN_ADDR
+              value: "0.0.0.0:8443"
+          ports:
+            - containerPort: 8443
+          volumeMounts:
+            - name: ardyn-volatile-ipc
+              mountPath: /var/run/ardyn

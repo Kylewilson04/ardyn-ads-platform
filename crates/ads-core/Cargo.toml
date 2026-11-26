@@ -1,0 +1,16 @@
+[package]
+name = "ads-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+x25519-dalek.workspace = true
+rand_core.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+serde.workspace = true
+hex.workspace = true
+thiserror.workspace = true

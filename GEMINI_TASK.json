@@ -1,0 +1,44 @@
+{
+  "organization": "ARDYN INTELLIGENCE SYSTEMS INC.",
+  "product": "Ardyn Atomic Data Sovereignty (ADS) Platform",
+  "version": "1.0.0",
+  "patent_traceability": {
+    "infrastructure_layer_110": ["crates/ads-sidecar", "crates/ads-ebpf", "native/ardyn_isa_scrubber"],
+    "execution_layer_120": ["crates/ads-core", "crates/ads-sidecar"],
+    "enforcement_layer_130": ["native/ardyn_isa_scrubber", "crates/ads-sentinel", "crates/ads-ebpf"],
+    "evidence_and_verification_layer_140": ["crates/ads-ddc", "crates/ads-metering", "sdks/typescript-webcrypto"]
+  },
+  "gemini_task_instructions": "Materialize all repository files exactly as specified, compile native/ardyn_isa_scrubber into libardyn_isa_scrubber.so via gcc, compile the Rust Cargo workspace in release mode, build the TypeScript WebCrypto SDK, and run cargo test --workspace to verify positive release, >10x Phase-2 scrubber timing regression, 4-probe runtime enforcement, DDC tamper rejection, and fail-closed atomic abort.",
+  "execution_steps": [
+    {
+      "step": 1,
+      "id": "BUILD_NATIVE_ISA_SCRUBBER",
+      "command": "gcc -O3 -Wall -Wextra -fPIC -std=c11 -shared -o native/ardyn_isa_scrubber/libardyn_isa_scrubber.so native/ardyn_isa_scrubber/ardyn_isa_scrubber.c",
+      "gate": "Verify libardyn_isa_scrubber.so exists with 0 warnings."
+    },
+    {
+      "step": 2,
+      "id": "BUILD_AND_TEST_RUST_WORKSPACE",
+      "command": "LD_LIBRARY_PATH=$(pwd)/native/ardyn_isa_scrubber cargo test --workspace --release -- --nocapture",
+      "gate": "100% unit and E2E integration tests pass across ads-core, ads-ddc, ads-sentinel, ads-metering, and ads-sidecar."
+    },
+    {
+      "step": 3,
+      "id": "BUILD_EBPF_LSM_PROBES",
+      "command": "clang -O2 -g -target bpf -c crates/ads-ebpf/src/sentinel_lsm.c -o crates/ads-ebpf/sentinel_lsm.bpf.o",
+      "gate": "Verify BPF bytecode object compiles cleanly for Linux kernel >= 5.15 with BPF_LSM enabled."
+    },
+    {
+      "step": 4,
+      "id": "BUILD_TYPESCRIPT_WEBCRYPTO_SDK",
+      "command": "cd sdks/typescript-webcrypto && npm install && npm run build",
+      "gate": "Generates @ardyn-intelligence/sovereign-client ESM/CJS bundle."
+    },
+    {
+      "step": 5,
+      "id": "PACKAGE_CONTAINER_MESH",
+      "command": "docker compose -f deploy/docker-compose.yml build",
+      "gate": "Produces ghcr.io/ardyn-intelligence/ads-sidecar:1.0.0 drop-in container."
+    }
+  ]
+}

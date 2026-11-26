@@ -1,0 +1,19 @@
+FROM rust:1.82-bookworm AS builder
+WORKDIR /build
+COPY native ./native
+RUN gcc -O3 -Wall -Wextra -fPIC -std=c11 -shared \
+    -o native/ardyn_isa_scrubber/libardyn_isa_scrubber.so \
+    native/ardyn_isa_scrubber/ardyn_isa_scrubber.c
+
+COPY Cargo.toml ./
+COPY crates ./crates
+ENV LD_LIBRARY_PATH=/build/native/ardyn_isa_scrubber
+RUN cargo build --release --bin ads-sidecar
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/native/ardyn_isa_scrubber/libardyn_isa_scrubber.so /usr/local/lib/
+COPY --from=builder /build/target/release/ads-sidecar /usr/local/bin/ads-sidecar
+RUN ldconfig
+EXPOSE 8443
+ENTRYPOINT ["/usr/local/bin/ads-sidecar"]

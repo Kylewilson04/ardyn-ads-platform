@@ -1,0 +1,11 @@
+[package]
+name = "ads-sentinel"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ads-ddc = { path = "../ads-ddc" }
+libc.workspace = true
+sha2.workspace = true
+serde.workspace = true
+hex.workspace = true

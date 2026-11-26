@@ -1,0 +1,14 @@
+[package]
+name = "ads-ddc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ads-core = { path = "../ads-core" }
+ed25519-dalek.workspace = true
+rand_core.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+thiserror.workspace = true
