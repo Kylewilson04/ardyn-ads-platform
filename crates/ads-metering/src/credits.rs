@@ -33,6 +33,8 @@ pub struct CreditAccount {
     pub balance_cents: i64,
     pub events: Vec<CreditEvent>,
     pub burned_sessions: Vec<String>, // idempotency: sessions already charged
+    #[serde(default)]
+    pub credited_refs: Vec<String>, // idempotency: payment references already credited
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -153,6 +155,42 @@ impl CreditEngine {
         let bal = acct.balance_cents;
         self.persist(&accounts);
         Ok(bal)
+    }
+
+    /// Idempotent payment-provider deposit (e.g. MoonPay Commerce, Stripe).
+    /// Enforces the $25 minimum and guarantees a webhook retry with the same
+    /// `reference` never double-credits the tenant. Returns `(balance_cents, newly_credited)`.
+    pub fn deposit_once(
+        &self,
+        tenant_id: &str,
+        reference: &str,
+        cents: i64,
+    ) -> Result<(i64, bool), CreditError> {
+        if cents < MIN_DEPOSIT_CENTS {
+            return Err(CreditError::BelowMinimum {
+                requested_cents: cents,
+                min_cents: MIN_DEPOSIT_CENTS,
+            });
+        }
+        let mut accounts = self.accounts.lock().unwrap();
+        let acct = accounts.entry(tenant_id.to_string()).or_default();
+        if acct.credited_refs.iter().any(|r| r == reference)
+            || acct.events.iter().any(|e| e.reference == reference)
+        {
+            return Ok((acct.balance_cents, false));
+        }
+        acct.balance_cents += cents;
+        acct.credited_refs.push(reference.to_string());
+        acct.events.push(CreditEvent {
+            kind: "deposit".into(),
+            amount_cents: cents,
+            reference: reference.to_string(),
+            balance_after_cents: acct.balance_cents,
+            timestamp_utc_ms: Self::now_ms(),
+        });
+        let bal = acct.balance_cents;
+        self.persist(&accounts);
+        Ok((bal, true))
     }
 
     /// Pre-flight check: does this tenant have enough credit for one event?
@@ -296,6 +334,20 @@ mod tests {
             e.authorize("t1"),
             Err(CreditError::Insufficient { .. })
         ));
+    }
+
+    #[test]
+    fn deposit_once_is_idempotent_and_enforces_min() {
+        let e = engine();
+        assert!(matches!(
+            e.deposit_once("t2", "moonpay:tx1", 500),
+            Err(CreditError::BelowMinimum { .. })
+        ));
+        assert_eq!(e.deposit_once("t2", "moonpay:tx1", 2500).unwrap(), (2500, true));
+        // Webhook retry with same tx reference must NOT double-credit.
+        assert_eq!(e.deposit_once("t2", "moonpay:tx1", 2500).unwrap(), (2500, false));
+        // Distinct tx credits normally.
+        assert_eq!(e.deposit_once("t2", "moonpay:tx2", 5000).unwrap(), (7500, true));
     }
 }
 

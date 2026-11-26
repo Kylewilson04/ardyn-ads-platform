@@ -77,6 +77,7 @@ pub struct SovereignExecutionResponse {
 
 pub static CREDITS: std::sync::OnceLock<std::sync::Arc<ads_metering::credits::CreditEngine>> =
     std::sync::OnceLock::new();
+pub static PAYMENT_PROVIDERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
 async fn health_handler(State(state): State<Arc<SidecarState>>) -> (axum::http::HeaderMap, Json<serde_json::Value>) {
     let root = state.ledger.lock().unwrap().current_root_hex();
@@ -110,7 +111,10 @@ async fn health_handler(State(state): State<Arc<SidecarState>>) -> (axum::http::
             "enabled": true,
             "price_cents_per_ddc": c.price_cents(),
             "min_deposit_cents": ads_metering::credits::MIN_DEPOSIT_CENTS,
-            "payment_providers": ["promo_code", "stripe_pending"],
+            "payment_providers": PAYMENT_PROVIDERS
+                .get()
+                .cloned()
+                .unwrap_or_else(|| vec!["promo_code".into(), "moonpay_commerce_pending".into(), "stripe_pending".into()]),
         })).unwrap_or(serde_json::json!(null)),
     })))
 }
@@ -335,14 +339,31 @@ async fn main() {
         env::var("ADS_TENANT_MASTER_KEY").ok().as_deref(),
         keyless,
     ));
+    let stripe_secret = env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.trim().is_empty());
+    let stripe_webhook_secret = env::var("STRIPE_WEBHOOK_SECRET").ok().filter(|s| !s.trim().is_empty());
+    let moonpay = web::MoonPayCommerceConfig::from_env();
+    let mut providers = vec!["promo_code".to_string()];
+    providers.push(if moonpay.is_checkout_configured() {
+        "moonpay_commerce".to_string()
+    } else {
+        "moonpay_commerce_pending".to_string()
+    });
+    providers.push(if stripe_secret.is_some() {
+        "stripe".to_string()
+    } else {
+        "stripe_pending".to_string()
+    });
+    let _ = PAYMENT_PROVIDERS.set(providers);
+
     let web_state = Arc::new(web::WebState {
         core: state.clone(),
         credits: credits.clone(),
         provider,
         tenant_auth,
         admin_key: env::var("ADS_ADMIN_KEY").ok(),
-        stripe_secret: env::var("STRIPE_SECRET_KEY").ok(),
-        stripe_webhook_secret: env::var("STRIPE_WEBHOOK_SECRET").ok(),
+        stripe_secret,
+        stripe_webhook_secret,
+        moonpay,
         demo_seeds,
     });
     web::seed_demo_accounts(&web_state);
