@@ -56,7 +56,7 @@ jobs:
         run: |
           docker run -d --name smoke -p 18443:8443 \
             -e ADS_LISTEN_ADDR=0.0.0.0:8443 \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v1.1.0
+            ghcr.io/kylewilson04/ardyn-ads-sidecar:v1.1.0
           sleep 3
           curl -fsS http://localhost:18443/v1/health | tee /dev/stderr | grep -q '"ok"\|healthy\|service'
           docker rm -f smoke
